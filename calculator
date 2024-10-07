@@ -1,0 +1,128 @@
+#include "stm32f4xx_hal.h"
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+// Global variables
+char Rx_buffer[20];       // UART receive buffer
+int Rx_index = 0;         // Index for receiving data
+int operation_flag = 0;   // Flag to indicate an operation is being processed
+int overflow_flag = 0;    // Overflow flag
+
+// UART handle
+UART_HandleTypeDef huart2;
+
+// Function prototypes
+void SystemClock_Config(void);
+void GPIO_Init(void);
+void UART2_Init(void);
+void process_uart_data(void);
+int perform_operation(int, int, char);
+void handle_error(const char*);
+
+int main(void) {
+    HAL_Init(); 
+    SystemClock_Config(); 
+    GPIO_Init(); 
+    UART2_Init(); 
+
+    while (1) {
+        // Main loop, waiting for UART input
+        if (operation_flag) {
+            process_uart_data();
+        }
+    }
+}
+
+// Function for UART initialization
+void UART2_Init(void) {
+    __HAL_RCC_USART2_CLK_ENABLE();
+    huart2.Instance = USART2;
+    huart2.Init.BaudRate = 9600;
+    huart2.Init.WordLength = UART_WORDLENGTH_8B;
+    huart2.Init.StopBits = UART_STOPBITS_1;
+    huart2.Init.Parity = UART_PARITY_NONE;
+    huart2.Init.Mode = UART_MODE_TX_RX;
+    huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+    HAL_UART_Init(&huart2);
+    HAL_UART_Receive_IT(&huart2, (uint8_t *)Rx_buffer, 1);
+}
+
+// UART interrupt callback
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART2) {
+        if (Rx_buffer[Rx_index] == '\r') {
+            operation_flag = 1;  // Signal that an operation is ready
+        } else {
+            Rx_index++;
+        }
+        HAL_UART_Receive_IT(&huart2, (uint8_t *)&Rx_buffer[Rx_index], 1);
+    }
+}
+
+// Function to process UART data
+void process_uart_data(void) {
+    int num1, num2;
+    char op;
+    int result;
+
+    // Parse input
+    if (sscanf(Rx_buffer, "%d %c %d", &num1, &op, &num2) == 3) {
+        result = perform_operation(num1, num2, op);
+        if (overflow_flag) {
+            handle_error("Overflow!");
+        } else {
+            char result_str[20];
+            sprintf(result_str, "Result: %d\r\n", result);
+            HAL_UART_Transmit(&huart2, (uint8_t *)result_str, strlen(result_str), HAL_MAX_DELAY);
+        }
+    } else {
+        handle_error("Input Error!");
+    }
+
+    // Reset for next operation
+    Rx_index = 0;
+    operation_flag = 0;
+    memset(Rx_buffer, 0, sizeof(Rx_buffer));
+}
+
+// Function to perform the calculation
+int perform_operation(int num1, int num2, char op) {
+    int result = 0;
+    overflow_flag = 0;
+
+    switch (op) {
+        case '+':
+            result = num1 + num2;
+            if (result < num1) overflow_flag = 1; // Detect overflow
+            break;
+        case '-':
+            result = num1 - num2;
+            if (result > num1) overflow_flag = 1; // Detect underflow
+            break;
+        case '*':
+            result = num1 * num2;
+            if (result / num2 != num1) overflow_flag = 1; // Detect overflow
+            break;
+        case '/':
+            if (num2 == 0) {
+                handle_error("Division by Zero!");
+            } else {
+                result = num1 / num2;
+            }
+            break;
+        default:
+            handle_error("Invalid Operator!");
+            break;
+    }
+    return result;
+}
+
+// Function to handle errors
+void handle_error(const char *error_message) {
+    HAL_UART_Transmit(&huart2, (uint8_t *)error_message, strlen(error_message), HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);  // LED ON for error
+    HAL_Delay(1000);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // LED OFF
+}
